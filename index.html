@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Call App - Web Client</title>
+    <!-- Google Fonts: Outfit & Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Google Material Icons -->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <!-- Custom Stylesheet -->
+    <link rel="stylesheet" href="styles.css">
+    
+    <!-- Firebase Compat SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+</head>
+<body>
+
+    <!-- Pantalla de Carga de la App -->
+    <div id="app-loader" class="loader-overlay">
+        <div class="spinner"></div>
+        <h2>Cargando aplicación...</h2>
+    </div>
+
+    <!-- Pantalla de Autenticación (Login & Registro) -->
+    <div id="login-container" class="auth-container" style="display: none;">
+        <div class="auth-card glass">
+            <div class="auth-header">
+                <span class="material-icons logo-icon">phone_in_talk</span>
+                <h1>Simple Call App</h1>
+                <p class="subtitle">Llamadas VoIP y mensajería segura</p>
+            </div>
+            
+            <div class="auth-body">
+                <h2>Ingresar / Registrarse</h2>
+                
+                <div class="input-group">
+                    <span class="material-icons">email</span>
+                    <input type="email" id="auth-email" placeholder="Correo Electrónico">
+                </div>
+                
+                <div class="input-group">
+                    <span class="material-icons">lock</span>
+                    <input type="password" id="auth-password" placeholder="Contraseña (mínimo 6 caracteres)">
+                </div>
+                
+                <button id="btn-login" class="btn primary">Iniciar Sesión</button>
+                <button id="btn-register" class="btn secondary">Crear Cuenta</button>
+                <button id="btn-forgot-password" class="btn text-link">¿Olvidaste tu contraseña?</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pantalla de Elección de Número -->
+    <div id="number-container" class="auth-container" style="display: none;">
+        <div class="auth-card glass">
+            <div class="auth-header">
+                <span class="material-icons logo-icon">dialpad</span>
+                <h1>Configura tu Número</h1>
+                <p class="subtitle">Elige un número identificador único para poder hacer y recibir llamadas</p>
+            </div>
+            
+            <div class="auth-body">
+                <div class="input-group">
+                    <span class="material-icons">person</span>
+                    <input type="text" id="profile-name" placeholder="Tu Nombre Completo">
+                </div>
+                
+                <div class="input-group">
+                    <span class="material-icons">phone</span>
+                    <input type="text" id="profile-number" placeholder="Tu Número de Teléfono (ej: 4612)">
+                </div>
+                
+                <button id="btn-save-number" class="btn primary">Comenzar a usar la app</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Overlay de Verificación de Email Obligatorio -->
+    <div id="verification-container" class="loader-overlay auth-overlay" style="display: none;">
+        <div class="auth-card glass text-center">
+            <span class="material-icons verification-icon">mark_email_unread</span>
+            <h2>Verifica tu Correo</h2>
+            <p>Hemos enviado un enlace de verificación a tu dirección de correo electrónico. Por favor, revísalo y actívalo para poder ingresar.</p>
+            
+            <button id="btn-check-verified" class="btn success w-full">Ya lo he verificado</button>
+            <button id="btn-resend-verification" class="btn secondary w-full">Reenviar Correo de Verificación</button>
+            <button id="btn-cancel-verification" class="btn danger-link w-full">Cancelar / Cerrar Sesión</button>
+        </div>
+    </div>
+
+    <!-- Panel de Control Principal (Dashboard) -->
+    <div id="dashboard-container" class="app-dashboard" style="display: none;">
+        
+        <!-- Notificaciones de escritorio banner -->
+        <div id="notif-banner" class="banner-alert" style="display: none;">
+            <div class="banner-content">
+                <span class="material-icons">notifications_active</span>
+                <span>Habilita las notificaciones de escritorio para recibir alertas de llamadas y mensajes nuevos.</span>
+            </div>
+            <button id="btn-enable-notif" class="btn-banner-action">Habilitar</button>
+            <span id="btn-close-banner" class="material-icons btn-banner-close">close</span>
+        </div>
+
+        <div class="dashboard-grid">
+            <!-- Barra Lateral: Menús y Listas -->
+            <aside class="sidebar glass">
+                
+                <!-- Info de usuario perfil en cabecera lateral -->
+                <div class="user-profile-header">
+                    <div class="profile-avatar">
+                        <span id="user-avatar-char">U</span>
+                    </div>
+                    <div class="profile-details">
+                        <h4 id="user-display-name">Usuario</h4>
+                        <p id="user-display-number">Tel: 0000</p>
+                    </div>
+                </div>
+
+                <!-- Tabs de Navegación -->
+                <nav class="sidebar-nav">
+                    <button class="nav-tab active" data-tab="tab-dial">
+                        <span class="material-icons">dialpad</span>
+                        <span>Llamar</span>
+                    </button>
+                    <button class="nav-tab" data-tab="tab-chats">
+                        <span class="material-icons">forum</span>
+                        <span>Chats</span>
+                    </button>
+                    <button class="nav-tab" data-tab="tab-contacts">
+                        <span class="material-icons">contacts</span>
+                        <span>Contactos</span>
+                    </button>
+                    <button class="nav-tab" data-tab="tab-history">
+                        <span class="material-icons">history</span>
+                        <span>Historial</span>
+                    </button>
+                    <button class="nav-tab" data-tab="tab-profile">
+                        <span class="material-icons">settings</span>
+                        <span>Perfil</span>
+                    </button>
+                </nav>
+
+                <!-- Área de contenido de lista en base al tab activo -->
+                <div class="sidebar-content">
+                    
+                    <!-- Tab: Dial (Teclado) -->
+                    <div id="tab-dial" class="tab-panel active">
+                        <div class="dialer-container">
+                            <div class="dialer-display">
+                                <input type="text" id="dial-input" placeholder="Ingresa un número" readonly>
+                                <button id="btn-dial-delete" class="material-icons">backspace</button>
+                            </div>
+                            <div class="dialpad-grid">
+                                <button class="dial-btn" data-val="1">1</button>
+                                <button class="dial-btn" data-val="2">2</button>
+                                <button class="dial-btn" data-val="3">3</button>
+                                <button class="dial-btn" data-val="4">4</button>
+                                <button class="dial-btn" data-val="5">5</button>
+                                <button class="dial-btn" data-val="6">6</button>
+                                <button class="dial-btn" data-val="7">7</button>
+                                <button class="dial-btn" data-val="8">8</button>
+                                <button class="dial-btn" data-val="9">9</button>
+                                <button class="dial-btn" data-val="*">*</button>
+                                <button class="dial-btn" data-val="0">0</button>
+                                <button class="dial-btn" data-val="#">#</button>
+                            </div>
+                            <button id="btn-initiate-voip" class="btn-call-large success-btn">
+                                <span class="material-icons">call</span>
+                                <span>Llamar por VoIP</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Chats -->
+                    <div id="tab-chats" class="tab-panel">
+                        <div class="list-header">
+                            <h3>Conversaciones</h3>
+                            <button id="btn-new-chat-dialog" class="material-icons list-action-btn">chat</button>
+                        </div>
+                        <div id="chats-list" class="items-list scrollable">
+                            <!-- Los chats se cargarán aquí dinámicamente -->
+                        </div>
+                    </div>
+
+                    <!-- Tab: Contactos -->
+                    <div id="tab-contacts" class="tab-panel">
+                        <div class="list-header">
+                            <h3>Mis Contactos</h3>
+                            <button id="btn-new-contact-dialog" class="material-icons list-action-btn">add_circle</button>
+                        </div>
+                        <div id="contacts-list" class="items-list scrollable">
+                            <!-- Los contactos se cargarán aquí dinámicamente -->
+                        </div>
+                    </div>
+
+                    <!-- Tab: Historial -->
+                    <div id="tab-history" class="tab-panel">
+                        <div class="list-header">
+                            <h3>Historial de Llamadas</h3>
+                            <button id="btn-clear-history-confirm" class="material-icons list-action-btn">delete_sweep</button>
+                        </div>
+                        <div id="history-list" class="items-list scrollable">
+                            <!-- El historial se cargará aquí dinámicamente -->
+                        </div>
+                    </div>
+
+                    <!-- Tab: Perfil / Ajustes -->
+                    <div id="tab-profile" class="tab-panel">
+                        <div class="profile-settings-list scrollable">
+                            <h3>Ajustes del Perfil</h3>
+                            
+                            <div class="setting-item">
+                                <label>Nombre del Perfil</label>
+                                <div class="setting-row">
+                                    <input type="text" id="settings-name" placeholder="Nombre">
+                                    <button id="btn-update-name" class="btn-small primary">Guardar</button>
+                                </div>
+                            </div>
+                            
+                            <div class="setting-item-toggle">
+                                <div class="toggle-text">
+                                    <h4>Notificaciones de Mensajes</h4>
+                                    <p>Habilitar sonidos y alertas de chat</p>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" id="settings-toggle-msg-notif" checked>
+                                    <span class="slider round"></span>
+                                </label>
+                            </div>
+
+                            <div class="setting-item-toggle">
+                                <div class="toggle-text">
+                                    <h4>Confirmación de lectura</h4>
+                                    <p>Mostrar marcas ✓✓ azules al recibir</p>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" id="settings-toggle-read-receipts" checked>
+                                    <span class="slider round"></span>
+                                </label>
+                            </div>
+                            
+                            <div class="setting-item">
+                                <button id="btn-change-password-dialog" class="btn secondary w-full">Cambiar Contraseña</button>
+                            </div>
+
+                            <div class="setting-item">
+                                <button id="btn-sign-out" class="btn danger w-full">
+                                    <span class="material-icons">logout</span>
+                                    <span>Cerrar Sesión</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </aside>
+
+            <!-- Panel Central: Área de Conversación Activa / Pantalla Completa -->
+            <main class="chat-container glass">
+                
+                <!-- Estado Inicial: Sin chat seleccionado -->
+                <div id="chat-empty-state" class="empty-state">
+                    <span class="material-icons">forum</span>
+                    <h3>Ninguna conversación seleccionada</h3>
+                    <p>Elige un chat de la lista o marca un número en la pestaña de llamadas para iniciar.</p>
+                </div>
+
+                <!-- Chat Activo Container -->
+                <div id="chat-active-container" class="chat-active" style="display: none;">
+                    
+                    <!-- Cabecera del Chat -->
+                    <header class="chat-header">
+                        <div class="chat-contact-info">
+                            <span class="material-icons contact-avatar-icon">account_circle</span>
+                            <div class="contact-details">
+                                <h3 id="active-chat-name">Contacto</h3>
+                                <p id="active-chat-number">0000</p>
+                            </div>
+                        </div>
+                        <div class="chat-header-actions">
+                            <button id="btn-chat-call-voip" class="btn-header-call success-text">
+                                <span class="material-icons">phone</span>
+                            </button>
+                        </div>
+                    </header>
+                    
+                    <!-- Historial de Mensajes -->
+                    <div id="chat-messages-scroll" class="chat-messages scrollable">
+                        <!-- Los mensajes se cargarán dinámicamente aquí -->
+                    </div>
+                    
+                    <!-- Entrada de Mensaje -->
+                    <footer class="chat-input-footer">
+                        <input type="text" id="chat-message-input" placeholder="Escribe un mensaje...">
+                        <button id="btn-chat-send" class="btn-send-message primary">
+                            <span class="material-icons">send</span>
+                        </button>
+                    </footer>
+                </div>
+
+            </main>
+        </div>
+
+        <!-- Pantalla de Llamada Activa (Saliente / Entrante / Conectada) -->
+        <div id="call-overlay" class="call-overlay-screen" style="display: none;">
+            <div class="call-card glass">
+                <div class="call-avatar">
+                    <span class="material-icons">person</span>
+                </div>
+                <h2 id="call-user-name">Nombre de Contacto</h2>
+                <p id="call-user-number">0000</p>
+                <div id="call-status-label" class="call-status">Marcando...</div>
+                <div id="call-timer-label" class="call-timer" style="display: none;">00:00</div>
+                
+                <div class="call-controls">
+                    <!-- Botón Silenciar Micrófono -->
+                    <button id="btn-call-mute" class="btn-circle-control">
+                        <span class="material-icons">mic_off</span>
+                    </button>
+                    <!-- Botón Activar Altavoz / Sonido -->
+                    <button id="btn-call-speaker" class="btn-circle-control">
+                        <span class="material-icons">volume_up</span>
+                    </button>
+                    <!-- Botón Colgar / Cancelar / Rechazar -->
+                    <button id="btn-call-hangup" class="btn-circle-control danger">
+                        <span class="material-icons">call_end</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Alerta de Llamada Entrante (Modal flotante) -->
+        <div id="incoming-call-modal" class="incoming-call-popup" style="display: none;">
+            <div class="incoming-call-card glass">
+                <div class="incoming-call-info">
+                    <span class="material-icons ringing-animation">ring_volume</span>
+                    <div>
+                        <h4>Llamada VoIP Entrante</h4>
+                        <p id="incoming-caller-label">Número: 0000</p>
+                    </div>
+                </div>
+                <div class="incoming-call-actions">
+                    <button id="btn-incoming-reject" class="btn btn-icon danger">
+                        <span class="material-icons">call_end</span>
+                        <span>Rechazar</span>
+                    </button>
+                    <button id="btn-incoming-accept" class="btn btn-icon success">
+                        <span class="material-icons">call</span>
+                        <span>Responder</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Modales Genéricos en UI -->
+    
+    <!-- Modal: Nuevo Contacto -->
+    <div id="modal-new-contact" class="dialog-overlay" style="display: none;">
+        <div class="dialog-card glass">
+            <h3>Agregar Nuevo Contacto</h3>
+            <div class="dialog-body">
+                <input type="text" id="new-contact-name" placeholder="Nombre del Contacto">
+                <input type="text" id="new-contact-number" placeholder="Número de Teléfono">
+            </div>
+            <div class="dialog-footer">
+                <button id="btn-close-contact-dialog" class="btn secondary">Cancelar</button>
+                <button id="btn-save-new-contact" class="btn primary">Agregar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Nueva Conversación -->
+    <div id="modal-new-chat" class="dialog-overlay" style="display: none;">
+        <div class="dialog-card glass">
+            <h3>Iniciar Conversación</h3>
+            <p>Escribe el número de teléfono con el que deseas chatear:</p>
+            <div class="dialog-body">
+                <input type="text" id="new-chat-number" placeholder="Número de Teléfono (ej: 4612)">
+            </div>
+            <div class="dialog-footer">
+                <button id="btn-close-chat-dialog" class="btn secondary">Cancelar</button>
+                <button id="btn-start-new-chat" class="btn primary">Iniciar Chat</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Cambiar Contraseña -->
+    <div id="modal-change-password" class="dialog-overlay" style="display: none;">
+        <div class="dialog-card glass">
+            <h3>Cambiar Contraseña</h3>
+            <div class="dialog-body">
+                <input type="password" id="new-password-input" placeholder="Nueva Contraseña (mínimo 6 caracteres)">
+            </div>
+            <div class="dialog-footer">
+                <button id="btn-close-pass-dialog" class="btn secondary">Cancelar</button>
+                <button id="btn-save-new-password" class="btn primary">Actualizar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Audio Element para sonidos de Llamada (ringtone) y Mensaje -->
+    <audio id="audio-ringtone" loop src="https://assets.mixkit.co/active_storage/sfx/1359/1359-84.wav" preload="auto"></audio>
+    <audio id="audio-notification" src="https://assets.mixkit.co/active_storage/sfx/2869/2869-84.wav" preload="auto"></audio>
+
+    <!-- Lógica de la Web Application -->
+    <script src="app.js"></script>
+</body>
+</html>
