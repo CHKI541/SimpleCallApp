@@ -61,6 +61,7 @@ const peerConfig = {
 // Elementos de Audio en el DOM
 const ringtoneAudio = document.getElementById("audio-ringtone");
 const notificationAudio = document.getElementById("audio-notification");
+const remoteAudio = document.getElementById("remote-audio");
 
 // --- INICIALIZACIÓN ---
 document.addEventListener("DOMContentLoaded", () => {
@@ -735,6 +736,11 @@ function initiateVoipCall(targetNumber) {
         
         // Crear conexión peer
         peerConnection = new RTCPeerConnection(peerConfig);
+        peerConnection.ontrack = event => {
+            if (remoteAudio.srcObject !== event.streams[0]) {
+                remoteAudio.srcObject = event.streams[0];
+            }
+        };
         localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
         // ICE Candidates de nuestro lado -> enviar a Firestore
@@ -855,6 +861,11 @@ function acceptIncomingCall() {
         localStream = stream;
         
         peerConnection = new RTCPeerConnection(peerConfig);
+        peerConnection.ontrack = event => {
+            if (remoteAudio.srcObject !== event.streams[0]) {
+                remoteAudio.srcObject = event.streams[0];
+            }
+        };
         localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
         // ICE Candidates de nuestro lado -> enviar
