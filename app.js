@@ -37,6 +37,7 @@ let chatMessagesListener = null;
 let chatsListListener = null;
 let contactsListener = null;
 let historyListener = null;
+let callSessionListener = null; // listener activo de sesión de llamada en curso
 const individualChatListeners = {}; // roomId -> listener
 
 const peerConfig = {
@@ -57,6 +58,17 @@ const peerConfig = {
     ],
     sdpSemantics: "unified-plan"
 };
+
+// Función helper para prevenir vulnerabilidades de XSS (Cross-Site Scripting) al inyectar HTML
+function escapeHTML(str) {
+    if (!str) return "";
+    return str.toString()
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
 
 // Elementos de Audio en el DOM
 const ringtoneAudio = document.getElementById("audio-ringtone");
@@ -156,13 +168,15 @@ function startGlobalListeners() {
                         return;
                     }
                     showIncomingCallPopup(callSession.callerNumber);
-                } else if (callSession.status === "ended") {
+                } else if (callSession.status === "ended" || callSession.status === "rejected") {
+                    // El caller terminó la llamada — el callee debe terminarla también
                     hideIncomingCallPopup();
-                    if (currentCallNumber === myNumber) {
+                    if (peerConnection) {
                         endCallLocally();
                     }
                 }
             } else {
+                // El documento fue eliminado (caller limpió la sesión)
                 hideIncomingCallPopup();
                 if (isIncomingCall && peerConnection) {
                     endCallLocally();
@@ -488,18 +502,29 @@ function loadContactsList() {
                 const contact = doc.data();
                 const item = document.createElement("div");
                 item.className = "list-item";
+                
+                const nameEscaped = escapeHTML(contact.name);
+                const numberEscaped = escapeHTML(contact.number);
+                const avatarChar = nameEscaped.length > 0 ? nameEscaped.charAt(0).toUpperCase() : "?";
+
                 item.innerHTML = `
-                    <div class="profile-avatar">${contact.name.charAt(0).toUpperCase()}</div>
+                    <div class="profile-avatar">${avatarChar}</div>
                     <div class="list-item-info">
-                        <div class="list-item-title">${contact.name}</div>
-                        <div class="list-item-subtitle">Tel: ${contact.number}</div>
+                        <div class="list-item-title">${nameEscaped}</div>
+                        <div class="list-item-subtitle">Tel: ${numberEscaped}</div>
                     </div>
                     <div class="list-item-actions">
-                        <button class="material-icons btn-item-action chat" onclick="openDirectChat('${contact.number}', '${contact.name}')">forum</button>
-                        <button class="material-icons btn-item-action call" onclick="initiateVoipCall('${contact.number}')">phone</button>
-                        <button class="material-icons btn-item-action" onclick="deleteContact('${contact.id}')" style="color: var(--hangup-red);">delete</button>
+                        <button class="material-icons btn-item-action chat">forum</button>
+                        <button class="material-icons btn-item-action call">phone</button>
+                        <button class="material-icons btn-item-action delete" style="color: var(--hangup-red);">delete</button>
                     </div>
                 `;
+
+                // Asignar listeners programáticamente para evitar inyecciones XSS en atributos onclick
+                item.querySelector(".chat").addEventListener("click", () => openDirectChat(contact.number, contact.name));
+                item.querySelector(".call").addEventListener("click", () => initiateVoipCall(contact.number));
+                item.querySelector(".delete").addEventListener("click", () => deleteContact(contact.id));
+
                 listContainer.appendChild(item);
             });
         });
@@ -564,18 +589,22 @@ function loadChatsList() {
                         const otherName = contactMap[otherNumber] || otherNumber;
                         const dateStr = formatTimestamp(room.lastMessageTimestamp);
                         
+                        const otherNameEscaped = escapeHTML(otherName);
+                        const lastMsgEscaped = room.lastMessageText ? escapeHTML(room.lastMessageText) : "Sin mensajes";
+                        const avatarChar = otherNameEscaped.length > 0 ? otherNameEscaped.charAt(0).toUpperCase() : "?";
+
                         const item = document.createElement("div");
                         item.className = "list-item" + (activeChatNumber === otherNumber ? " active-bg" : "");
                         item.onclick = () => openDirectChat(otherNumber, otherName);
                         
                         item.innerHTML = `
-                            <div class="profile-avatar">${otherName.charAt(0).toUpperCase()}</div>
+                            <div class="profile-avatar">${avatarChar}</div>
                             <div class="list-item-info">
                                 <div class="list-item-header">
-                                    <div class="list-item-title">${otherName}</div>
+                                    <div class="list-item-title">${otherNameEscaped}</div>
                                     <div class="list-item-time">${dateStr}</div>
                                 </div>
-                                <div class="list-item-subtitle">${room.lastMessageText || "Sin mensajes"}</div>
+                                <div class="list-item-subtitle">${lastMsgEscaped}</div>
                             </div>
                         `;
                         listContainer.appendChild(item);
@@ -662,9 +691,11 @@ window.openDirectChat = function(otherNumber, otherName) {
                     else ticks = '<span class="material-icons message-status" style="font-size: 14px; margin-left: 2px; color: var(--text-light-gray)">done</span>';
                 }
 
+                const textEscaped = escapeHTML(msg.text);
+
                 row.innerHTML = `
                     <div class="message-bubble">
-                        <div class="message-text">${msg.text}</div>
+                        <div class="message-text">${textEscaped}</div>
                         <div class="message-info">
                             <span>${formattedTime}</span>
                             ${ticks}
@@ -730,16 +761,48 @@ function initiateVoipCall(targetNumber) {
     document.getElementById("call-timer-label").style.display = "none";
     document.getElementById("call-overlay").style.display = "flex";
 
+    // Verificar si el navegador admite WebRTC (requiere HTTPS o localhost)
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert("Error de seguridad: Tu navegador bloquea el acceso al micrófono.\n\n" +
+              "Esto ocurre si la web no se sirve bajo una conexión segura (HTTPS) o localhost.\n" +
+              "Por favor, utiliza HTTPS o localhost para poder realizar llamadas.");
+        endCallLocally();
+        return;
+    }
+
     // Adquirir Micrófono
     navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
         localStream = stream;
         
         // Crear conexión peer
         peerConnection = new RTCPeerConnection(peerConfig);
-        peerConnection.ontrack = event => {
-            if (remoteAudio.srcObject !== event.streams[0]) {
-                remoteAudio.srcObject = event.streams[0];
+        
+        // Listeners de estado para depuración
+        peerConnection.onconnectionstatechange = () => {
+            console.log("WebRTC Connection State (Caller):", peerConnection.connectionState);
+            if (peerConnection.connectionState === "failed" || peerConnection.connectionState === "disconnected") {
+                console.warn("La conexión WebRTC falló o se desconectó");
+                endCallLocally();
             }
+        };
+        peerConnection.oniceconnectionstatechange = () => {
+            console.log("WebRTC ICE Connection State (Caller):", peerConnection.iceConnectionState);
+        };
+
+        peerConnection.ontrack = event => {
+            console.log("Track de audio remoto recibido (Caller):", event.track.kind);
+            if (event.streams && event.streams[0]) {
+                if (remoteAudio.srcObject !== event.streams[0]) {
+                    remoteAudio.srcObject = event.streams[0];
+                }
+            } else {
+                if (!remoteAudio.srcObject) {
+                    remoteAudio.srcObject = new MediaStream();
+                }
+                remoteAudio.srcObject.addTrack(event.track);
+            }
+            // Forzar reproducción debido a políticas de autoplay
+            remoteAudio.play().catch(err => console.warn("Autoplay de audio remoto bloqueado:", err));
         };
         localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
@@ -762,6 +825,9 @@ function initiateVoipCall(targetNumber) {
                     answerSdp: null
                 });
 
+                // Empezar a escuchar ICE candidates del callee YA (pueden llegar antes del answer SDP)
+                listenRemoteIceCandidates(targetNumber, false);
+
                 // Escuchar estado de respuesta del receptor
                 listenToCallSessionUpdates(targetNumber);
             });
@@ -773,8 +839,14 @@ function initiateVoipCall(targetNumber) {
 }
 
 function listenToCallSessionUpdates(sessionDocId) {
+    // Limpiar listener anterior si existe
+    if (callSessionListener) {
+        callSessionListener();
+        callSessionListener = null;
+    }
     // Escuchar el documento de la sesión de llamada
-    historyListener = db.collection("calls").doc(sessionDocId)
+    let remoteDescriptionSet = false;
+    callSessionListener = db.collection("calls").doc(sessionDocId)
         .onSnapshot(doc => {
             if (!doc.exists) {
                 endCallLocally();
@@ -783,23 +855,28 @@ function listenToCallSessionUpdates(sessionDocId) {
 
             const session = doc.data();
             if (session.status === "rejected") {
-                alert("Llamada rechazada por el otro usuario");
-                endCallLocally();
+                document.getElementById("call-status-label").innerText = "Llamada rechazada";
+                setTimeout(() => endCallLocally(), 1500);
             } else if (session.status === "ended") {
                 endCallLocally();
-            } else if (session.status === "answered" && session.answerSdp) {
+            } else if (session.status === "answered" && session.answerSdp && !remoteDescriptionSet) {
+                remoteDescriptionSet = true; // Evitar procesar el answer más de una vez
                 document.getElementById("call-status-label").innerText = "Llamada Conectada";
                 startCallTimer();
                 
-                // Conectar WebRTC con la respuesta
-                const desc = new RTCSessionDescription({ type: 'answer', sdp: session.answerSdp });
-                peerConnection.setRemoteDescription(desc).then(() => {
-                    // Escuchar ICE candidates remotos (enviados por el receptor -> caller == false)
-                    listenRemoteIceCandidates(sessionDocId, false);
-                });
+                // Conectar WebRTC con la respuesta SDP del callee
+                if (peerConnection) {
+                    const desc = new RTCSessionDescription({ type: 'answer', sdp: session.answerSdp });
+                    peerConnection.setRemoteDescription(desc).catch(e => {
+                        console.warn("setRemoteDescription answer failed:", e);
+                    });
+                    // NOTA: listenRemoteIceCandidates ya fue llamado en initiateVoipCall
+                    // justo después de setLocalDescription para evitar race conditions
+                }
             }
         });
 }
+
 
 function listenRemoteIceCandidates(sessionDocId, listenForCaller) {
     db.collection("calls").doc(sessionDocId).collection("candidates")
@@ -856,15 +933,47 @@ function acceptIncomingCall() {
     document.getElementById("call-timer-label").style.display = "none";
     document.getElementById("call-overlay").style.display = "flex";
 
+    // Verificar si el navegador admite WebRTC (requiere HTTPS o localhost)
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert("Error de seguridad: Tu navegador bloquea el acceso al micrófono.\n\n" +
+              "Esto ocurre si la web no se sirve bajo una conexión segura (HTTPS) o localhost.\n" +
+              "Por favor, utiliza HTTPS o localhost para poder contestar llamadas.");
+        rejectIncomingCall();
+        return;
+    }
+
     // Actualizar estado a Conectado y responder WebRTC
     navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
         localStream = stream;
         
         peerConnection = new RTCPeerConnection(peerConfig);
-        peerConnection.ontrack = event => {
-            if (remoteAudio.srcObject !== event.streams[0]) {
-                remoteAudio.srcObject = event.streams[0];
+        
+        // Listeners de estado para depuración
+        peerConnection.onconnectionstatechange = () => {
+            console.log("WebRTC Connection State (Callee):", peerConnection.connectionState);
+            if (peerConnection.connectionState === "failed" || peerConnection.connectionState === "disconnected") {
+                console.warn("La conexión WebRTC falló o se desconectó");
+                endCallLocally();
             }
+        };
+        peerConnection.oniceconnectionstatechange = () => {
+            console.log("WebRTC ICE Connection State (Callee):", peerConnection.iceConnectionState);
+        };
+
+        peerConnection.ontrack = event => {
+            console.log("Track de audio remoto recibido (Callee):", event.track.kind);
+            if (event.streams && event.streams[0]) {
+                if (remoteAudio.srcObject !== event.streams[0]) {
+                    remoteAudio.srcObject = event.streams[0];
+                }
+            } else {
+                if (!remoteAudio.srcObject) {
+                    remoteAudio.srcObject = new MediaStream();
+                }
+                remoteAudio.srcObject.addTrack(event.track);
+            }
+            // Forzar reproducción debido a políticas de autoplay
+            remoteAudio.play().catch(err => console.warn("Autoplay de audio remoto bloqueado:", err));
         };
         localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
 
@@ -882,6 +991,9 @@ function acceptIncomingCall() {
                 const desc = new RTCSessionDescription({ type: 'offer', sdp: session.offerSdp });
                 
                 peerConnection.setRemoteDescription(desc).then(() => {
+                    // Empezar a escuchar ICE candidates del caller YA (pueden llegar antes de crear el answer)
+                    listenRemoteIceCandidates(myNumber, true);
+
                     peerConnection.createAnswer().then(answer => {
                         peerConnection.setLocalDescription(answer).then(() => {
                             // Enviar respuesta en Firestore
@@ -893,8 +1005,8 @@ function acceptIncomingCall() {
                             document.getElementById("call-status-label").innerText = "Llamada Conectada";
                             startCallTimer();
 
-                            // Escuchar ICE candidates remotos (enviados por el emisor -> caller == true)
-                            listenRemoteIceCandidates(myNumber, true);
+                            // ICE candidates del caller ya se escuchan desde antes del answer
+                            // (se inician en acceptIncomingCall justo tras setRemoteDescription)
                             
                             // Escuchar si cuelgan
                             listenToCallSessionUpdates(myNumber);
@@ -938,6 +1050,11 @@ function endCallLocally() {
     
     // Parar sonidos
     ringtoneAudio.pause();
+    ringtoneAudio.currentTime = 0;
+    
+    // Limpiar audio remoto
+    remoteAudio.srcObject = null;
+    remoteAudio.pause();
     
     // Registrar historial localmente
     saveCallRecordLocally();
@@ -948,27 +1065,35 @@ function endCallLocally() {
         localStream = null;
     }
     if (peerConnection) {
+        peerConnection.ontrack = null;
+        peerConnection.onicecandidate = null;
         peerConnection.close();
         peerConnection = null;
     }
 
-    if (historyListener) {
-        historyListener();
-        historyListener = null;
+    if (callSessionListener) {
+        callSessionListener();
+        callSessionListener = null;
     }
 
-    // Limpiar Firebase sesión temporal
+    // Limpiar Firebase: el caller borra el documento; el callee solo actualiza estado
     const sessionDocId = isIncomingCall ? myNumber : currentCallNumber;
-    if (sessionDocId && !isIncomingCall) {
-        // El llamador borra los candidatos y la sesión tras colgar
-        setTimeout(() => {
-            db.collection("calls").doc(sessionDocId).collection("candidates").get().then(snap => {
-                snap.forEach(doc => doc.ref.delete());
-                db.collection("calls").doc(sessionDocId).delete();
-            });
-        }, 1000);
+    if (sessionDocId) {
+        if (!isIncomingCall) {
+            // Caller: borrar candidatos y documento
+            setTimeout(() => {
+                db.collection("calls").doc(sessionDocId).collection("candidates").get().then(snap => {
+                    snap.forEach(d => d.ref.delete());
+                    db.collection("calls").doc(sessionDocId).delete();
+                });
+            }, 1500);
+        } else {
+            // Callee: solo marcar como ended (el caller borrará el doc)
+            db.collection("calls").doc(sessionDocId).update({ status: "ended" }).catch(() => {});
+        }
     }
 
+    isIncomingCall = false;
     currentCallNumber = "";
 }
 
@@ -1004,11 +1129,10 @@ function toggleCallMute() {
 }
 
 function toggleCallSpeaker() {
-    // En Web, el ruteo a altavoz se realiza modificando las propiedades de audio del elemento HTML de reproducción
-    // o se puede emular visualmente ya que los navegadores redirigen al altavoz predeterminado
+    // En navegadores, el audio ya se reproduce por el altavoz por defecto.
+    // Solo actualizamos el estado visual del botón.
     const speakerBtn = document.getElementById("btn-call-speaker");
     speakerBtn.classList.toggle("active");
-    alert("Altavoz conmutado");
 }
 
 function saveCallRecordLocally() {
@@ -1047,6 +1171,8 @@ function loadCallHistoryList() {
                 const typeColor = rec.type === "missed" ? "var(--hangup-red)" : "var(--call-green)";
                 const durationStr = rec.duration > 0 ? `${Math.floor(rec.duration / 60)}m ${rec.duration % 60}s` : "Perdida";
 
+                const phoneEscaped = escapeHTML(rec.phoneNumber);
+
                 const item = document.createElement("div");
                 item.className = "list-item";
                 item.innerHTML = `
@@ -1054,7 +1180,7 @@ function loadCallHistoryList() {
                         <span class="material-icons" style="color: ${typeColor};">${typeIcon}</span>
                     </div>
                     <div class="list-item-info">
-                        <div class="list-item-title">${rec.phoneNumber}</div>
+                        <div class="list-item-title">${phoneEscaped}</div>
                         <div class="list-item-subtitle">${dateStr} • Duración: ${durationStr}</div>
                     </div>
                 `;
